@@ -135,6 +135,14 @@ export async function getEmailsForUser(emailAddress: string): Promise<Email[]> {
   return result.rows.map(mapEmail);
 }
 
+export async function getSentEmails(emailAddress: string): Promise<Email[]> {
+  const result = await pool.query(
+    'SELECT * FROM emails WHERE sender_email = $1 ORDER BY sent_at DESC',
+    [emailAddress]
+  );
+  return result.rows.map(mapEmail);
+}
+
 export async function getUnreadCount(emailAddress: string): Promise<number> {
   const result = await pool.query(
     'SELECT COUNT(*) FROM emails WHERE recipient_email = $1 AND is_read = FALSE',

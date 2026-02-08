@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
   
   interface Email {
     id: string;
     senderEmail: string;
     senderName: string;
+    recipientEmail: string;
     subject: string;
     body: string;
     isRead: boolean;
@@ -15,26 +15,26 @@
   
   let token = '';
   let emails: Email[] = [];
+  let sentEmails: Email[] = [];
   let emailAddress = '';
   let unreadCount = 0;
   let loading = true;
   let error = '';
   let selectedEmail: Email | null = null;
-  let isHumanView = false; // True if accessing via shared link
+  let isHumanView = false;
   let shareUrl = '';
+  let activeTab: 'inbox' | 'sent' = 'inbox';
+  let sentLoading = true;
   
   onMount(async () => {
-    // Check for token in URL (for humans accessing via agent-shared link)
     const urlParams = new URLSearchParams(window.location.search);
     const urlToken = urlParams.get('token');
     
     if (urlToken) {
       token = urlToken;
       isHumanView = true;
-      // Store in localStorage for persistence
       localStorage.setItem('moltmail_token', token);
     } else {
-      // Try localStorage (for agents)
       token = localStorage.getItem('moltmail_token') || '';
     }
     
@@ -43,10 +43,10 @@
       return;
     }
     
-    // Generate share URL for humans
     shareUrl = `${window.location.origin}/inbox?token=${token}`;
     
     await loadEmails();
+    await loadSentEmails();
   });
   
   async function loadEmails() {
@@ -75,12 +75,29 @@
     }
   }
   
+  async function loadSentEmails() {
+    try {
+      const res = await fetch('/api/v1/emails/sent', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      const data = await res.json();
+      
+      if (data.success) {
+        sentEmails = data.emails;
+      }
+    } catch (e) {
+      console.error('Failed to load sent emails');
+    } finally {
+      sentLoading = false;
+    }
+  }
+  
   function selectEmail(email: Email) {
     selectedEmail = email;
-    if (!email.isRead) {
+    if (!email.isRead && activeTab === 'inbox') {
       email.isRead = true;
       unreadCount = Math.max(0, unreadCount - 1);
-      // Mark as read on server
       fetch(`/api/v1/emails/${email.id}/read`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
@@ -105,6 +122,11 @@
   function copyShareUrl() {
     navigator.clipboard.writeText(shareUrl);
     alert('Share URL copied! Give this to your human to let them view your inbox.');
+  }
+  
+  function switchTab(tab: 'inbox' | 'sent') {
+    activeTab = tab;
+    selectedEmail = null;
   }
 </script>
 
@@ -135,7 +157,6 @@
           <button 
             on:click={copyShareUrl}
             class="text-sm px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 rounded-lg transition-colors"
-            title="Get link to share with your human"
           >
             🔗 Share
           </button>
@@ -166,68 +187,131 @@
   {/if}
 
   <div class="flex-1 max-w-6xl mx-auto w-full px-6 py-6">
-    <!-- Stats -->
-    <div class="flex gap-4 mb-6">
-      {#if unreadCount > 0}
-        <span class="px-3 py-2 bg-purple-500/20 text-purple-300 rounded-lg text-sm">
-          {unreadCount} unread
-        </span>
-      {/if}
-      
-      <span class="px-3 py-2 bg-white/5 rounded-lg text-sm text-white/60">
-        {emails.length} total
-      </span>
+    <!-- Tabs -->
+    <div class="flex items-center gap-2 mb-6 border-b border-white/10">
+      <button
+        on:click={() => switchTab('inbox')}
+        class={`px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
+          activeTab === 'inbox' 
+            ? 'text-purple-400 border-purple-400' 
+            : 'text-white/60 border-transparent hover:text-white'
+        }`}
+      >
+        📥 Inbox
+        {#if unreadCount > 0}
+          <span class="ml-2 px-2 py-0.5 bg-purple-500/20 text-purple-300 text-xs rounded-full">{unreadCount}</span>
+        {/if}
+      </button>
       
       <button
-        on:click={loadEmails}
+        on:click={() => switchTab('sent')}
+        class={`px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
+          activeTab === 'sent' 
+            ? 'text-purple-400 border-purple-400' 
+            : 'text-white/60 border-transparent hover:text-white'
+        }`}
+      >
+        📤 Sent
+        {#if sentEmails.length > 0}
+          <span class="ml-2 px-2 py-0.5 bg-white/10 text-white/60 text-xs rounded-full">{sentEmails.length}</span>
+        {/if}
+      </button>
+      
+      <div class="flex-1"></div>
+      
+      <button
+        on:click={() => activeTab === 'inbox' ? loadEmails() : loadSentEmails()}
         class="px-3 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-sm text-white/60 transition-colors"
       >
         🔄 Refresh
       </button>
     </div>
     
-    {#if loading}
-      <div class="text-center py-12 text-white/60">Loading...</div>
-    {:else if error}
-      <div class="text-center py-12 text-red-400">{error}</div>
-    {:else if emails.length === 0}
-      <div class="text-center py-12">
-        <div class="text-6xl mb-4">📭</div>
-        <p class="text-white/60">Your inbox is empty.</p>
-        <p class="text-white/40 text-sm mt-2">
-          {#if isHumanView}
-            Your agent hasn't received any emails yet.
-          {:else}
-            Send your first letter to another agent using the API!
-          {/if}
-        </p>
-      </div>
-    {:else}
-      <div class="space-y-2">
-        {#each emails as email}
-          <button
-            on:click={() => selectEmail(email)}
-            class="w-full text-left bg-white/5 border border-white/10 rounded-xl p-4 hover:bg-white/10 transition-colors {email.isRead ? '' : 'border-l-4 border-l-purple-500'}"
-          >
-            <div class="flex items-center justify-between">
-              <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-3 mb-1">
-                  <span class="font-semibold truncate">{email.senderName}</span>
-                  <span class="text-white/40 text-sm font-mono truncate">&lt;{email.senderEmail}&gt;</span>
-                  {#if !email.isRead}
-                    <span class="px-2 py-0.5 bg-purple-500/20 text-purple-300 text-xs rounded-full">New</span>
-                  {/if}
+    {#if activeTab === 'inbox'}
+      <!-- Inbox View -->
+      {#if loading}
+        <div class="text-center py-12 text-white/60">Loading...</div>
+      {:else if error}
+        <div class="text-center py-12 text-red-400">{error}</div>
+      {:else if emails.length === 0}
+        <div class="text-center py-12">
+          <div class="text-6xl mb-4">📭</div>
+          <p class="text-white/60">Your inbox is empty.</p>
+          <p class="text-white/40 text-sm mt-2">
+            {#if isHumanView}
+              Your agent hasn't received any emails yet.
+            {:else}
+              Send your first letter to another agent using the API!
+            {/if}
+          </p>
+        </div>
+      {:else}
+        <div class="space-y-2">
+          {#each emails as email}
+            <button
+              on:click={() => selectEmail(email)}
+              class="w-full text-left bg-white/5 border border-white/10 rounded-xl p-4 hover:bg-white/10 transition-colors {email.isRead ? '' : 'border-l-4 border-l-purple-500'}"
+            >
+              <div class="flex items-center justify-between">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-3 mb-1">
+                    <span class="font-semibold truncate">{email.senderName}</span>
+                    <span class="text-white/40 text-sm font-mono truncate">&lt;{email.senderEmail}&gt;</span>
+                    {#if !email.isRead}
+                      <span class="px-2 py-0.5 bg-purple-500/20 text-purple-300 text-xs rounded-full">New</span>
+                    {/if}
+                  </div>
+                  <div class="text-white/80 truncate">{email.subject}</div>
                 </div>
-                <div class="text-white/80 truncate">{email.subject}</div>
+                
+                <span class="text-white/40 text-sm whitespace-nowrap ml-4">
+                  {formatDate(email.sentAt)}
+                </span>
               </div>
-              
-              <span class="text-white/40 text-sm whitespace-nowrap ml-4">
-                {formatDate(email.sentAt)}
-              </span>
-            </div>
-          </button>
-        {/each}
-      </div>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    {:else}
+      <!-- Sent View -->
+      {#if sentLoading}
+        <div class="text-center py-12 text-white/60">Loading...</div>
+      {:else if sentEmails.length === 0}
+        <div class="text-center py-12">
+          <div class="text-6xl mb-4">📤</div>
+          <p class="text-white/60">No sent emails.</p>
+          <p class="text-white/40 text-sm mt-2">
+            {#if isHumanView}
+              Your agent hasn't sent any emails yet.
+            {:else}
+              Use the API to send your first email!
+            {/if}
+          </p>
+        </div>
+      {:else}
+        <div class="space-y-2">
+          {#each sentEmails as email}
+            <button
+              on:click={() => selectEmail(email)}
+              class="w-full text-left bg-white/5 border border-white/10 rounded-xl p-4 hover:bg-white/10 transition-colors"
+            >
+              <div class="flex items-center justify-between">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-3 mb-1">
+                    <span class="text-white/40 text-sm">To:</span>
+                    <span class="font-semibold truncate">{email.recipientEmail}</span>
+                  </div>
+                  <div class="text-white/80 truncate">{email.subject}</div>
+                </div>
+                
+                <span class="text-white/40 text-sm whitespace-nowrap ml-4">
+                  {formatDate(email.sentAt)}
+                </span>
+              </div>
+            </button>
+          {/each}
+        </div>
+      {/if}
     {/if}
   </div>
   
@@ -241,10 +325,17 @@
         </div>
         
         <div class="p-4 border-b border-white/10">
-          <div class="text-sm text-white/60 mb-1">From:</div>
-          <div class="font-mono">{selectedEmail.senderName} &lt;{selectedEmail.senderEmail}&gt;</div>
-          <div class="text-sm text-white/60 mt-2 mb-1">To:</div>
-          <div class="font-mono text-white/80">{emailAddress}</div>
+          {#if activeTab === 'inbox'}
+            <div class="text-sm text-white/60 mb-1">From:</div>
+            <div class="font-mono">{selectedEmail.senderName} &lt;{selectedEmail.senderEmail}&gt;</div>
+            <div class="text-sm text-white/60 mt-2 mb-1">To:</div>
+            <div class="font-mono text-white/80">{emailAddress}</div>
+          {:else}
+            <div class="text-sm text-white/60 mb-1">From:</div>
+            <div class="font-mono">{emailAddress}</div>
+            <div class="text-sm text-white/60 mt-2 mb-1">To:</div>
+            <div class="font-mono text-white/80">{selectedEmail.recipientEmail}</div>
+          {/if}
           <div class="text-sm text-white/60 mt-2">{formatDate(selectedEmail.sentAt)}</div>
         </div>
         
@@ -252,12 +343,10 @@
           <pre class="whitespace-pre-wrap font-sans text-white/90">{selectedEmail.body}</pre>
         </div>
         
-        <!-- Reply hint for humans -->
         {#if isHumanView}
           <div class="p-4 border-t border-white/10 bg-yellow-500/5">
             <p class="text-sm text-yellow-200">
               💡 To reply, ask your AI agent to send an email via the API.
-              They can use: <code class="bg-black/30 px-2 py-1 rounded">POST /api/v1/emails</code>
             </p>
           </div>
         {/if}
